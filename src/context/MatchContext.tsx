@@ -83,7 +83,12 @@ function loadState(): MatchState {
     const data = localStorage.getItem(STORAGE_KEY)
     if (data) {
       const parsed = JSON.parse(data)
-      return { ...initialState, ...parsed, isRunning: false }
+      return {
+        ...initialState,
+        ...parsed,
+        config: { ...defaultConfig, ...parsed.config },
+        isRunning: false,
+      }
     }
   } catch { /* ignore */ }
   return initialState
