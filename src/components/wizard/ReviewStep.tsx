@@ -52,6 +52,10 @@ export function ReviewStep() {
           <span className="text-sm text-text-muted">GK rotation</span>
           <span className="text-sm font-medium text-text">{config.rotateGoalkeeper ? 'Yes' : 'No'}</span>
         </div>
+        <div className="flex justify-between">
+          <span className="text-sm text-text-muted">Sub style</span>
+          <span className="text-sm font-medium text-text">{config.substitutionMode === 'rolling' ? 'Rolling (1 at a time)' : 'Grouped'}</span>
+        </div>
         <div className="border-t border-border pt-3 flex justify-between">
           <span className="text-sm font-medium text-primary">Target per player</span>
           <span className="text-sm font-bold text-primary">~{Math.round(idealMinutes)} min</span>

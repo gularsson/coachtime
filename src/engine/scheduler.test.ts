@@ -11,147 +11,205 @@ function makePlayers(count: number): Player[] {
   }))
 }
 
-describe('generateSchedule', () => {
+function makeConfig(overrides: Partial<MatchConfig> = {}): MatchConfig {
+  return {
+    format: { kind: 'halves', count: 2, minutesEach: 15 },
+    playersOnPitch: 7,
+    squadSize: 10,
+    rotateGoalkeeper: false,
+    substitutionMode: 'grouped',
+    ...overrides,
+  }
+}
+
+describe('grouped substitutions', () => {
   it('handles no subs needed (squad == pitch size)', () => {
-    const config: MatchConfig = {
+    const config = makeConfig({
       format: { kind: 'total', totalMinutes: 25 },
-      playersOnPitch: 7,
       squadSize: 7,
-      rotateGoalkeeper: false,
-    }
+    })
     const players = makePlayers(7)
     const schedule = generateSchedule(config, players)
 
     expect(schedule.timeSlots).toHaveLength(1)
     expect(schedule.events).toHaveLength(0)
     expect(schedule.fairnessScore).toBe(0)
-    expect(schedule.timeSlots[0].onPitch).toHaveLength(7)
-    // Every player gets full time
     Object.values(schedule.playerMinutes).forEach(mins => {
       expect(mins).toBe(25)
     })
   })
 
   it('handles 1 substitute', () => {
-    const config: MatchConfig = {
+    const config = makeConfig({
       format: { kind: 'total', totalMinutes: 30 },
-      playersOnPitch: 7,
       squadSize: 8,
-      rotateGoalkeeper: false,
-    }
+    })
     const players = makePlayers(8)
     const schedule = generateSchedule(config, players)
 
     expect(schedule.events.length).toBeGreaterThanOrEqual(1)
-    // All players should get some time
     Object.values(schedule.playerMinutes).forEach(mins => {
       expect(mins).toBeGreaterThan(0)
     })
   })
 
   it('gives roughly equal time with 10 players, 7 on pitch, 2x15min', () => {
-    const config: MatchConfig = {
-      format: { kind: 'halves', count: 2, minutesEach: 15 },
-      playersOnPitch: 7,
-      squadSize: 10,
-      rotateGoalkeeper: false,
-    }
+    const config = makeConfig()
     const players = makePlayers(10)
     const schedule = generateSchedule(config, players)
 
-    // Ideal per rotating player: 30 * 6 / 9 = 20 min
-    // Fairness should be reasonable
     expect(schedule.fairnessScore).toBeLessThan(5)
-
-    // GK (player 0) should play full 30 minutes since rotateGoalkeeper is false
-    expect(schedule.playerMinutes['p0']).toBe(30)
-
-    // No player should have 0 minutes
-    const rotationMinutes = Object.entries(schedule.playerMinutes)
+    expect(schedule.playerMinutes['p0']).toBe(30) // GK full time
+    Object.entries(schedule.playerMinutes)
       .filter(([id]) => id !== 'p0')
-      .map(([, mins]) => mins)
-    rotationMinutes.forEach(mins => {
-      expect(mins).toBeGreaterThan(0)
-    })
+      .forEach(([, mins]) => expect(mins).toBeGreaterThan(0))
   })
 
   it('handles GK rotation enabled', () => {
-    const config: MatchConfig = {
+    const config = makeConfig({
       format: { kind: 'total', totalMinutes: 30 },
-      playersOnPitch: 7,
-      squadSize: 10,
       rotateGoalkeeper: true,
-    }
+    })
     const players = makePlayers(10)
     const schedule = generateSchedule(config, players)
 
-    // GK should NOT play full time when rotation is on
-    // All 10 players are in the rotation pool
     const allMinutes = Object.values(schedule.playerMinutes)
     expect(allMinutes.length).toBe(10)
-
-    // Ideal: 30 * 7 / 10 = 21 min each
     const mean = allMinutes.reduce((a, b) => a + b, 0) / allMinutes.length
     expect(mean).toBeCloseTo(21, 0)
   })
 
   it('produces valid slot transitions (no duplicate players)', () => {
-    const config: MatchConfig = {
+    const config = makeConfig({
       format: { kind: 'halves', count: 2, minutesEach: 20 },
-      playersOnPitch: 7,
       squadSize: 12,
-      rotateGoalkeeper: false,
-    }
+    })
     const players = makePlayers(12)
     const schedule = generateSchedule(config, players)
 
     for (const slot of schedule.timeSlots) {
-      // No duplicates on pitch
       expect(new Set(slot.onPitch).size).toBe(slot.onPitch.length)
-      // Correct number on pitch
       expect(slot.onPitch.length).toBe(7)
-      // On and off should not overlap
       const overlap = slot.onPitch.filter(id => slot.offPitch.includes(id))
       expect(overlap).toHaveLength(0)
     }
   })
 
   it('handles large squad (14 players, 7 on pitch)', () => {
-    const config: MatchConfig = {
+    const config = makeConfig({
       format: { kind: 'total', totalMinutes: 40 },
-      playersOnPitch: 7,
       squadSize: 14,
-      rotateGoalkeeper: false,
-    }
+    })
     const players = makePlayers(14)
     const schedule = generateSchedule(config, players)
 
-    // Should have multiple substitution events
     expect(schedule.events.length).toBeGreaterThanOrEqual(2)
-
-    // GK plays full time
     expect(schedule.playerMinutes['p0']).toBe(40)
-
-    // Fairness should be decent
     expect(schedule.fairnessScore).toBeLessThan(8)
   })
 
   it('handles 5v5 with 8 players', () => {
-    const config: MatchConfig = {
+    const config = makeConfig({
       format: { kind: 'halves', count: 2, minutesEach: 10 },
       playersOnPitch: 5,
       squadSize: 8,
-      rotateGoalkeeper: false,
-    }
+    })
     const players = makePlayers(8)
     const schedule = generateSchedule(config, players)
 
-    // Total minutes per slot should sum correctly
     let totalSlotMinutes = 0
     for (const slot of schedule.timeSlots) {
       totalSlotMinutes += (slot.endMinute - slot.startMinute) * slot.onPitch.length
     }
-    // Should equal total_minutes * players_on_pitch
     expect(totalSlotMinutes).toBe(20 * 5)
+  })
+})
+
+describe('rolling substitutions', () => {
+  it('swaps only one player at a time', () => {
+    const config = makeConfig({ substitutionMode: 'rolling' })
+    const players = makePlayers(10)
+    const schedule = generateSchedule(config, players)
+
+    for (const event of schedule.events) {
+      expect(event.playersOut).toHaveLength(1)
+      expect(event.playersIn).toHaveLength(1)
+    }
+  })
+
+  it('achieves reasonable fairness', () => {
+    const config = makeConfig({
+      substitutionMode: 'rolling',
+      format: { kind: 'halves', count: 2, minutesEach: 15 },
+    })
+    const players = makePlayers(10)
+    const schedule = generateSchedule(config, players)
+
+    // Rolling should achieve fairness within ±2 min per player
+    expect(schedule.fairnessScore).toBeLessThan(3)
+  })
+
+  it('gives all players playing time', () => {
+    const config = makeConfig({ substitutionMode: 'rolling' })
+    const players = makePlayers(10)
+    const schedule = generateSchedule(config, players)
+
+    Object.values(schedule.playerMinutes).forEach(mins => {
+      expect(mins).toBeGreaterThan(0)
+    })
+  })
+
+  it('GK stays on for full match when rotation is off', () => {
+    const config = makeConfig({
+      substitutionMode: 'rolling',
+      format: { kind: 'total', totalMinutes: 30 },
+    })
+    const players = makePlayers(10)
+    const schedule = generateSchedule(config, players)
+
+    expect(schedule.playerMinutes['p0']).toBe(30)
+  })
+
+  it('has correct number of players on pitch each slot', () => {
+    const config = makeConfig({
+      substitutionMode: 'rolling',
+      format: { kind: 'halves', count: 2, minutesEach: 20 },
+      squadSize: 12,
+    })
+    const players = makePlayers(12)
+    const schedule = generateSchedule(config, players)
+
+    for (const slot of schedule.timeSlots) {
+      expect(slot.onPitch.length).toBe(7)
+      expect(new Set(slot.onPitch).size).toBe(slot.onPitch.length)
+      const overlap = slot.onPitch.filter(id => slot.offPitch.includes(id))
+      expect(overlap).toHaveLength(0)
+    }
+  })
+
+  it('produces more substitution events than grouped', () => {
+    const config = makeConfig({
+      format: { kind: 'total', totalMinutes: 40 },
+      squadSize: 12,
+    })
+    const players = makePlayers(12)
+
+    const grouped = generateSchedule({ ...config, substitutionMode: 'grouped' }, players)
+    const rolling = generateSchedule({ ...config, substitutionMode: 'rolling' }, players)
+
+    expect(rolling.events.length).toBeGreaterThanOrEqual(grouped.events.length)
+  })
+
+  it('handles no subs needed', () => {
+    const config = makeConfig({
+      substitutionMode: 'rolling',
+      format: { kind: 'total', totalMinutes: 25 },
+      squadSize: 7,
+    })
+    const players = makePlayers(7)
+    const schedule = generateSchedule(config, players)
+
+    expect(schedule.events).toHaveLength(0)
+    expect(schedule.fairnessScore).toBe(0)
   })
 })

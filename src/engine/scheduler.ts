@@ -19,12 +19,124 @@ export function generateSchedule(config: MatchConfig, players: Player[]): Substi
     }
   }
 
-  // Determine rotation pool
+  if (config.substitutionMode === 'rolling') {
+    return generateRollingSchedule(config, players, totalMinutes)
+  }
+  return generateGroupedSchedule(config, players, totalMinutes)
+}
+
+// ---------------------------------------------------------------------------
+// Rolling substitutions: swap one player at a time for maximum fairness
+// ---------------------------------------------------------------------------
+
+function generateRollingSchedule(
+  config: MatchConfig,
+  players: Player[],
+  totalMinutes: number,
+): SubstitutionSchedule {
+  const P = config.playersOnPitch
   const gk = !config.rotateGoalkeeper ? players.find(p => p.isGoalkeeper) : null
   const fixedIds = gk ? [gk.id] : []
   const rotationPool = gk ? players.filter(p => p.id !== gk.id) : [...players]
   const R = rotationPool.length
-  const S = P - fixedIds.length // rotation spots per slot
+  const S = P - fixedIds.length // rotation spots on pitch
+
+  // One full cycle requires R swaps: each rotation player sits out exactly once.
+  // Swap interval = totalMinutes / R, clamped to be at least 2 min.
+  const numSwaps = R
+  const rawInterval = totalMinutes / (numSwaps + 1) // +1 to avoid swap at minute 0 and at the very end
+  const swapInterval = Math.max(2, rawInterval)
+
+  // Generate swap times
+  const swapTimes: number[] = []
+  let t = swapInterval
+  while (t < totalMinutes - 1) {
+    swapTimes.push(Math.round(t))
+    t += swapInterval
+  }
+  // Deduplicate and ensure they don't exceed totalMinutes
+  const uniqueSwapTimes = [...new Set(swapTimes)].filter(t => t > 0 && t < totalMinutes).sort((a, b) => a - b)
+
+  // Build time slots by simulating the match
+  const cumMinutes: Record<string, number> = {}
+  players.forEach(p => { cumMinutes[p.id] = 0 })
+
+  // Start with the first S rotation players on pitch
+  let currentOnPitch = rotationPool.slice(0, S).map(p => p.id)
+  let currentBench = rotationPool.slice(S).map(p => p.id)
+
+  const boundaries = [0, ...uniqueSwapTimes, totalMinutes]
+  const timeSlots: TimeSlot[] = []
+  const events: SubstitutionEvent[] = []
+
+  for (let i = 0; i < boundaries.length - 1; i++) {
+    const start = boundaries[i]
+    const end = boundaries[i + 1]
+    const duration = end - start
+
+    // Record this slot
+    timeSlots.push({
+      startMinute: start,
+      endMinute: end,
+      onPitch: [...fixedIds, ...currentOnPitch],
+      offPitch: [...currentBench],
+    })
+
+    // Update cumulative minutes for on-pitch players
+    for (const id of fixedIds) cumMinutes[id] += duration
+    for (const id of currentOnPitch) cumMinutes[id] += duration
+
+    // At the end of this slot (if not the last), perform a rolling swap
+    if (i < boundaries.length - 2) {
+      // Find the on-pitch rotation player with the MOST cumulative time
+      const sortedOnPitch = [...currentOnPitch].sort((a, b) => cumMinutes[b] - cumMinutes[a])
+      const playerOut = sortedOnPitch[0]
+
+      // Find the bench player with the LEAST cumulative time
+      const sortedBench = [...currentBench].sort((a, b) => cumMinutes[a] - cumMinutes[b])
+      const playerIn = sortedBench[0]
+
+      // Only swap if it actually helps (bench player has less time than on-pitch player)
+      if (playerOut && playerIn && cumMinutes[playerIn] < cumMinutes[playerOut]) {
+        events.push({
+          minute: end,
+          playersOut: [playerOut],
+          playersIn: [playerIn],
+        })
+        currentOnPitch = currentOnPitch.map(id => id === playerOut ? playerIn : id)
+        currentBench = currentBench.map(id => id === playerIn ? playerOut : id)
+      }
+    }
+  }
+
+  // Compute fairness score over rotation pool
+  const rotationMinutes = rotationPool.map(p => cumMinutes[p.id])
+  const mean = rotationMinutes.reduce((a, b) => a + b, 0) / rotationMinutes.length
+  const variance = rotationMinutes.reduce((sum, m) => sum + (m - mean) ** 2, 0) / rotationMinutes.length
+
+  return {
+    timeSlots,
+    events,
+    playerMinutes: { ...cumMinutes },
+    fairnessScore: Math.sqrt(variance),
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Grouped substitutions: swap multiple players at once in time slots
+// ---------------------------------------------------------------------------
+
+function generateGroupedSchedule(
+  config: MatchConfig,
+  players: Player[],
+  totalMinutes: number,
+): SubstitutionSchedule {
+  const P = config.playersOnPitch
+  const gk = !config.rotateGoalkeeper ? players.find(p => p.isGoalkeeper) : null
+  const fixedIds = gk ? [gk.id] : []
+  const rotationPool = gk ? players.filter(p => p.id !== gk.id) : [...players]
+  const R = rotationPool.length
+  const S = P - fixedIds.length
 
   const minSlots = Math.ceil(R / S)
   const breakpoints = getBreakpoints(config.format)
@@ -87,7 +199,6 @@ function greedyAssign(
   for (const slot of slotBounds) {
     const duration = slot.end - slot.start
 
-    // Sort rotation pool by cumulative minutes (ascending), break ties by roster order
     const sorted = [...rotationPool].sort((a, b) => {
       const diff = cumMinutes[a.id] - cumMinutes[b.id]
       return diff !== 0 ? diff : rotationPool.indexOf(a) - rotationPool.indexOf(b)
@@ -99,7 +210,6 @@ function greedyAssign(
     const onPitch = [...fixedIds, ...onPitchRotation]
     const offPitch = offPitchRotation
 
-    // Update cumulative minutes
     for (const id of onPitch) {
       cumMinutes[id] += duration
     }
@@ -112,10 +222,8 @@ function greedyAssign(
     })
   }
 
-  // Refinement pass: try swapping between adjacent slots to improve fairness
   refine(timeSlots, slotBounds, cumMinutes, rotationPool, fixedIds)
 
-  // Derive substitution events
   const events: SubstitutionEvent[] = []
   for (let i = 1; i < timeSlots.length; i++) {
     const prevOn = new Set(timeSlots[i - 1].onPitch)
@@ -127,18 +235,16 @@ function greedyAssign(
     }
   }
 
-  // Compute fairness
   const rotationIds = rotationPool.map(p => p.id)
   const rotationMinutes = rotationIds.map(id => cumMinutes[id])
   const mean = rotationMinutes.reduce((a, b) => a + b, 0) / rotationMinutes.length
   const variance = rotationMinutes.reduce((sum, m) => sum + (m - mean) ** 2, 0) / rotationMinutes.length
-  const fairnessScore = Math.sqrt(variance)
 
   return {
     timeSlots,
     events,
     playerMinutes: { ...cumMinutes },
-    fairnessScore,
+    fairnessScore: Math.sqrt(variance),
   }
 }
 
@@ -152,7 +258,6 @@ function refine(
   const fixedSet = new Set(fixedIds)
   let improved = true
 
-  // Run up to 3 passes
   for (let pass = 0; pass < 3 && improved; pass++) {
     improved = false
 
@@ -162,30 +267,25 @@ function refine(
       const durA = slotBounds[i].end - slotBounds[i].start
       const durB = slotBounds[i + 1].end - slotBounds[i + 1].start
 
-      // Rotation players in A but not in B
       const onlyA = slotA.onPitch.filter(id => !fixedSet.has(id) && !slotB.onPitch.includes(id))
       const onlyB = slotB.onPitch.filter(id => !fixedSet.has(id) && !slotA.onPitch.includes(id))
 
       for (const idA of onlyA) {
         for (const idB of onlyB) {
-          // Try swapping: idA plays in B instead of A, idB plays in A instead of B
           const currentScore = computeVariance(rotationPool.map(p => cumMinutes[p.id]))
 
-          // Simulate swap
           cumMinutes[idA] = cumMinutes[idA] - durA + durB
           cumMinutes[idB] = cumMinutes[idB] - durB + durA
 
           const newScore = computeVariance(rotationPool.map(p => cumMinutes[p.id]))
 
           if (newScore < currentScore - 0.01) {
-            // Apply swap in time slots
             slotA.onPitch = slotA.onPitch.map(id => id === idA ? idB : id)
             slotA.offPitch = slotA.offPitch.map(id => id === idB ? idA : id)
             slotB.onPitch = slotB.onPitch.map(id => id === idB ? idA : id)
             slotB.offPitch = slotB.offPitch.map(id => id === idA ? idB : id)
             improved = true
           } else {
-            // Revert
             cumMinutes[idA] = cumMinutes[idA] - durB + durA
             cumMinutes[idB] = cumMinutes[idB] - durA + durB
           }

@@ -12,6 +12,7 @@ const defaultConfig: MatchConfig = {
   playersOnPitch: 7,
   squadSize: 10,
   rotateGoalkeeper: false,
+  substitutionMode: 'rolling',
 }
 
 const initialState: MatchState = {

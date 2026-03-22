@@ -93,6 +93,35 @@ export function MatchSetupStep() {
         </div>
       )}
 
+      {/* Substitution mode */}
+      <div>
+        <label className="block text-sm font-medium text-text mb-2">Substitution Style</label>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            onClick={() => dispatch({ type: 'UPDATE_CONFIG', payload: { substitutionMode: 'rolling' as const } })}
+            className={`py-3 px-4 rounded-xl text-sm font-medium border-2 transition-all ${
+              config.substitutionMode === 'rolling'
+                ? 'border-primary bg-primary/5 text-primary'
+                : 'border-border text-text-muted hover:border-gray-400'
+            }`}
+          >
+            <div className="font-semibold">Rolling</div>
+            <div className="text-xs opacity-70 mt-0.5">One at a time</div>
+          </button>
+          <button
+            onClick={() => dispatch({ type: 'UPDATE_CONFIG', payload: { substitutionMode: 'grouped' as const } })}
+            className={`py-3 px-4 rounded-xl text-sm font-medium border-2 transition-all ${
+              config.substitutionMode === 'grouped'
+                ? 'border-primary bg-primary/5 text-primary'
+                : 'border-border text-text-muted hover:border-gray-400'
+            }`}
+          >
+            <div className="font-semibold">Grouped</div>
+            <div className="text-xs opacity-70 mt-0.5">Swap multiple</div>
+          </button>
+        </div>
+      </div>
+
       {/* Players on pitch */}
       <div>
         <label className="block text-sm font-medium text-text mb-2">Players on Pitch</label>

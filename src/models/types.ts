@@ -11,11 +11,14 @@ export type MatchFormat =
   | { kind: 'total'; totalMinutes: number }
   | { kind: 'halves'; count: number; minutesEach: number };
 
+export type SubstitutionMode = 'grouped' | 'rolling';
+
 export interface MatchConfig {
   format: MatchFormat;
   playersOnPitch: number;
   squadSize: number;
   rotateGoalkeeper: boolean;
+  substitutionMode: SubstitutionMode;
 }
 
 export interface SubstitutionEvent {
